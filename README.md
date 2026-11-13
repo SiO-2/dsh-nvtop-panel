@@ -18,10 +18,10 @@ GPU monitor                          2 GPUs
 └─────────────────────────────────┘
 
 Processes
-PID       USER   DEV TYPE  GPU  GPU MEM    CPU  HOST MEM  Command
-10124    alice       0    C  62%   9.4 GiB   3.1%  1.8 GiB  llama-server
-10192      bob        1    C  47%   8.9 GiB   2.4%  1.6 GiB  python train.py
-10230    alice       2    C  89%  87.2 GiB  18.3%  2.6 GiB  vllm serve …
+PID       USER     DEV TYPE  GPU   GPU MEM    CPU  HOST MEM  Command
+10124    alice       0    C  62%   9.4 GiB   3.1%   1.8 GiB  llama-server
+10192      bob       1    C  47%   8.9 GiB   2.4%   1.6 GiB  python train.py
+10230    alice       2    C  89%  87.2 GiB  18.3%   2.6 GiB  vllm serve …
 ```
 
 ## Features
