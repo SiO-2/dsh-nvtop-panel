@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-nvtop-panel
+      name: dsh-nvtop-panel
+      config: {}

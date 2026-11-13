@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "GPU monitor (nvtop)",
+    "description": "Live nvtop-style GPU dashboard: utilization, memory, temperature, fan, power, and per-process GPU memory, refreshed automatically."
+  }
+}
