@@ -202,10 +202,12 @@ window.__ModuleLoader__.load({
             const tick = async () => {
               try {
                 const response = await fetch('/api/nvtop', { credentials: 'same-origin' });
-                const body = await response.json();
+                const text = await response.text();
+                let body = null;
+                try { body = JSON.parse(text); } catch { body = null; }
                 if (!alive.current) return;
-                if (!response.ok || body.ok === false) {
-                  setError(body?.message || `HTTP ${response.status}`);
+                if (!response.ok || body === null || body.ok === false) {
+                  setError(body?.message || `HTTP ${response.status}${body === null && text ? `: ${text.slice(0, 80)}` : ''}`);
                   setData(null);
                 } else {
                   setError(null);
