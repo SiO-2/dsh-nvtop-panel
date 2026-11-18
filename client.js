@@ -116,7 +116,8 @@ window.__ModuleLoader__.load({
       if (processes.length === 0) {
         return h('div', { className: 'nvtp-empty-note' }, t('noProcesses'));
       }
-      return h('table', { className: 'nvtp-table nvtp-procs-table' },
+      return h('div', { className: 'nvtp-scroll' },
+        h('table', { className: 'nvtp-table nvtp-procs-table' },
         h('thead', null,
           h('tr', null,
             h('th', { className: 'nvtp-num' }, t('pid')),
@@ -138,7 +139,7 @@ window.__ModuleLoader__.load({
             h('td', { className: 'nvtp-num' }, fmtMemory(p.memoryUsed)),
             h('td', { className: 'nvtp-num' }, p.cpuPercent === null || p.cpuPercent === undefined ? '—' : `${p.cpuPercent.toFixed(1)}%`),
             h('td', { className: 'nvtp-num' }, fmtHostMemory(p.hostMemKib)),
-            h('td', { className: 'nvtp-cmd nvtp-name' }, p.command)))));
+            h('td', { className: 'nvtp-cmd nvtp-name' }, p.command))))));
     }
 
     const CSS = `
@@ -165,12 +166,14 @@ window.__ModuleLoader__.load({
 .nvtp-stat-value{font-size:14px;font-variant-numeric:tabular-nums}
 .nvtp-procs{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:14px 16px}
 .nvtp-procs h2{margin:0 0 10px;font-size:14px;font-weight:600}
+.nvtp-scroll{overflow-x:auto;overscroll-behavior-x:contain}
 .nvtp-table{width:100%;border-collapse:collapse;font-size:13px}
+.nvtp-procs-table{width:max-content;min-width:100%}
 .nvtp-table th{color:var(--dsw-alias-label-secondary);font-weight:500;text-align:left;padding:4px 8px;border-bottom:1px solid var(--dsw-alias-border-l2);font-size:12px;white-space:nowrap}
 .nvtp-table td{padding:5px 8px;border-bottom:1px solid var(--dsw-alias-border-l1);white-space:nowrap}
 .nvtp-num{text-align:right;font-variant-numeric:tabular-nums}
 .nvtp-name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.nvtp-procs-table .nvtp-cmd{max-width:420px;overflow:hidden;text-overflow:ellipsis}
+.nvtp-procs-table .nvtp-cmd{max-width:none}
 .nvtp-empty-note{color:var(--dsw-alias-label-secondary);font-size:13px}
 .nvtp-error{border:1px solid var(--dsw-alias-state-error-primary);border-radius:10px;padding:14px 16px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
 .nvtp-error-label{color:var(--dsw-alias-state-error-primary);font-weight:600;margin-bottom:6px}
@@ -249,9 +252,12 @@ window.__ModuleLoader__.load({
               : null);
         }
 
-        function PanelIcon() {
+        function PanelIcon(props) {
           return h('svg', {
-            viewBox: '0 0 24 24', width: 22, height: 22, 'aria-hidden': true,
+            viewBox: '0 0 24 24',
+            width: props?.size ?? 18,
+            height: props?.size ?? 18,
+            'aria-hidden': true,
             style: { display: 'block' },
           },
           h('rect', { x: 2.5, y: 5.5, width: 19, height: 12, rx: 2,
