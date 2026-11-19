@@ -74,11 +74,51 @@ Tunable in your profile's `cordis.patch.yml`:
 ```yaml
 - id: dsh-nvtop-panel
   config:
-    intervalMs: 2000   # client poll interval, 500–60000 ms
+    intervalMs: 2000   # client poll interval, 500-60000 ms
+    peers:             # extra units sampled over SSH (see DGX Spark below)
+      - host: 192.0.2.11
+        title: 'Spark #2'
+      - host: 192.0.2.21
+        user: sparky
+        port: 22
 ```
 
-Editing the interval restarts the plugin and the panel picks up the new value on the
-next poll.
+Editing the interval or the peer list restarts the plugin and the panel picks
+up the new value on the next poll.
+
+## DGX Spark (GB10) support
+
+**Unified memory.** On a DGX Spark the GB10 GPU shares one LPDDR5X pool with
+the CPU, and `nvidia-smi` reports `memory.used` / `memory.total` as `[N/A]`.
+Following the [sparkDash](https://github.com/MiaAI-Lab/sparkDash) approach, the
+card then shows:
+
+- **Memory (unified pool)** - `used` is the GPU-allocated share (sum of
+  compute-apps), `total` is the OS-visible pool (`MemTotal`);
+- **Pool** - a second bar with whole-pool occupancy (GPU + CPU), with
+  `MemAvailable` as the free figure;
+- a `unified` chip marks such cards. Discrete GPUs keep using `nvidia-smi`
+  values unchanged.
+
+**Daisy-chained units.** Spark clusters do not expose peer GPUs through local
+`nvidia-smi`; each unit is its own machine. Add peers with the `peers` config
+above and the plugin samples each one over SSH (BatchMode, key auth only -
+`ssh <host>` must work without a password for the user dsh runs as).
+Interconnect peers usually sit on `192.0.2.x` (the ConnectX subnet): check
+`ip neigh`. Cards from every unit share one grid (side by side when width
+allows) and one merged nvtop-style process table whose `DEV` column is the unit
+index (`Spark #N` labels the cards). Peers are probed in the background, so a
+down or slow peer never delays the panel: it keeps showing its last error
+(`No route to host`, `Permission denied`, …) as a banner and retries every 10 s.
+A peer without an NVIDIA GPU shows a note instead of silently disappearing.
+
+Anyone who can open this DSH page can read the peer units' process tables;
+peers are therefore exactly as visible as the dsh user's SSH keys allow.
+
+Per-process GPU utilization and per-process unified-memory splits are
+driver-level statistics that `nvidia-smi`'s query interface does not expose; the
+`GPU` column shows device utilization and `GPU MEM` the compute-app allocation,
+as nvtop does on this hardware.
 
 ## Verify
 

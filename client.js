@@ -14,6 +14,8 @@ window.__ModuleLoader__.load({
         panel: 'GPU monitor',
         gpus: '{n} GPU',
         gpusOther: '{n} GPUs',
+        units: '{n} unit',
+        unitsOther: '{n} units',
         utilization: 'Utilization',
         memory: 'Memory',
         temperature: 'Temp',
@@ -23,6 +25,7 @@ window.__ModuleLoader__.load({
         noProcesses: 'No GPU processes',
         unavailable: 'GPU stats unavailable',
         stale: 'Waiting for data…',
+        localUnit: 'This machine',
         pid: 'PID',
         user: 'USER',
         dev: 'DEV',
@@ -70,8 +73,13 @@ window.__ModuleLoader__.load({
     function Bar(props) {
       const ratio = props.ratio;
       const pct = ratio === null || ratio === undefined ? 0 : Math.max(0, Math.min(100, ratio * 100));
+      const otherPct = props.other === null || props.other === undefined
+        ? 0 : Math.max(0, Math.min(100 - pct, props.other * 100));
       return h('div', { className: 'nvtp-bar ' + levelClass(ratio) },
-        h('div', { className: 'nvtp-bar-fill', style: { width: pct + '%' } }));
+        h('div', { className: 'nvtp-bar-fill', style: { width: pct + '%' } }),
+        props.other === null || props.other === undefined
+          ? null
+          : h('div', { className: 'nvtp-bar-fill nvtp-bar-other', style: { width: otherPct + '%' } }));
     }
 
     function Stat(props) {
@@ -81,23 +89,39 @@ window.__ModuleLoader__.load({
     }
 
     function GpuCard(props) {
-      const { gpu, t } = props;
+      const { gpu, t, unitTitle } = props;
       const memRatio = gpu.memoryUsed !== null && gpu.memoryTotal
         ? gpu.memoryUsed / gpu.memoryTotal : null;
       const powerRatio = gpu.powerDraw !== null && gpu.powerLimit
         ? gpu.powerDraw / gpu.powerLimit : null;
+      // Unified pool: stacked bar — GPU-allocated share plus everything else
+      // (CPU, page cache) that eats the shared pool; free stays empty.
+      const unifiedPool = gpu.unified === true && gpu.memoryAvailable !== null && gpu.memoryTotal;
+      const otherRatio = unifiedPool
+        ? Math.max(0, (gpu.memoryTotal - gpu.memoryAvailable) / gpu.memoryTotal
+          - (memRatio ?? 0))
+        : null;
+      const memTitle = unifiedPool
+        ? `GPU ${fmtMemory(gpu.memoryUsed)} · other ${fmtMemory(Math.max(0, gpu.memoryTotal - gpu.memoryAvailable - gpu.memoryUsed))} · free ${fmtMemory(gpu.memoryAvailable)} of ${fmtMemory(gpu.memoryTotal)} unified pool`
+        : undefined;
       return h('section', { className: 'nvtp-card' },
         h('header', { className: 'nvtp-card-head' },
           h('span', { className: 'nvtp-card-name' }, gpu.name),
-          h('span', { className: 'nvtp-card-index' }, `GPU ${gpu.index}`)),
+          gpu.unified === true
+            ? h('span', { className: 'nvtp-chip' }, 'unified')
+            : null,
+          h('span', { className: 'nvtp-card-index' },
+            unitTitle !== null && unitTitle !== undefined
+              ? `${unitTitle} · GPU ${gpu.index}`
+              : `GPU ${gpu.index}`)),
         h('div', { className: 'nvtp-rows' },
           h('div', { className: 'nvtp-row' },
             h('span', { className: 'nvtp-row-label' }, t('utilization')),
             h(Bar, { ratio: gpu.utilization === null ? null : gpu.utilization / 100 }),
             h('span', { className: 'nvtp-row-value' }, fmtPercent(gpu.utilization))),
-          h('div', { className: 'nvtp-row' },
+          h('div', { className: 'nvtp-row', title: memTitle },
             h('span', { className: 'nvtp-row-label' }, t('memory')),
-            h(Bar, { ratio: memRatio }),
+            h(Bar, { ratio: memRatio, other: otherRatio }),
             h('span', { className: 'nvtp-row-value' },
               `${fmtMemory(gpu.memoryUsed)} / ${fmtMemory(gpu.memoryTotal)}`)),
           h('div', { className: 'nvtp-row' },
@@ -112,17 +136,21 @@ window.__ModuleLoader__.load({
     }
 
     function ProcessTable(props) {
-      const { processes, t } = props;
+      const { processes, t, multiUnit } = props;
       if (processes.length === 0) {
         return h('div', { className: 'nvtp-empty-note' }, t('noProcesses'));
       }
+      const deviceText = (p) => {
+        const gpuIndex = p.device === null || p.device === undefined ? '—' : String(p.device);
+        return multiUnit ? String(p.unitIdx) : gpuIndex;
+      };
       return h('div', { className: 'nvtp-scroll' },
         h('table', { className: 'nvtp-table nvtp-procs-table' },
         h('thead', null,
           h('tr', null,
             h('th', { className: 'nvtp-num' }, t('pid')),
             h('th', null, t('user')),
-            h('th', { className: 'nvtp-num' }, t('dev')),
+            h('th', { className: 'nvtp-num', title: multiUnit ? 'unit index' : undefined }, t('dev')),
             h('th', null, t('type')),
             h('th', { className: 'nvtp-num' }, t('gpu')),
             h('th', { className: 'nvtp-num' }, t('gpuMem')),
@@ -130,10 +158,10 @@ window.__ModuleLoader__.load({
             h('th', { className: 'nvtp-num' }, t('hostMem')),
             h('th', { className: 'nvtp-cmd' }, t('command')))),
         h('tbody', null,
-          processes.map((p) => h('tr', { key: p.pid + ':' + (p.device ?? '') + ':' + p.command.slice(0, 24) },
+          processes.map((p) => h('tr', { key: p.unitIdx + ':' + p.pid + ':' + (p.device ?? '') + ':' + p.command.slice(0, 24) },
             h('td', { className: 'nvtp-num' }, fmtInt(p.pid)),
             h('td', { className: 'nvtp-user' }, p.user ?? '—'),
-            h('td', { className: 'nvtp-num' }, p.device === null || p.device === undefined ? '—' : String(p.device)),
+            h('td', { className: 'nvtp-num' }, deviceText(p)),
             h('td', { className: 'nvtp-type' }, p.type ?? '—'),
             h('td', { className: 'nvtp-num' }, fmtPercent(p.gpuUtilization)),
             h('td', { className: 'nvtp-num' }, fmtMemory(p.memoryUsed)),
@@ -155,8 +183,9 @@ window.__ModuleLoader__.load({
 .nvtp-row{display:grid;grid-template-columns:64px 1fr 130px;gap:10px;align-items:center;font-size:12px}
 .nvtp-row-label{color:var(--dsw-alias-label-secondary)}
 .nvtp-row-value{text-align:right;font-variant-numeric:tabular-nums}
-.nvtp-bar{height:8px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
-.nvtp-bar-fill{height:100%;border-radius:4px;background:var(--dsw-alias-brand-primary);transition:width .4s ease}
+.nvtp-bar{height:8px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;display:flex}
+.nvtp-bar-fill{height:100%;background:var(--dsw-alias-brand-primary);transition:width .4s ease;flex:none}
+.nvtp-bar-other{background:var(--dsw-alias-state-idle-primary);opacity:.7}
 .nvtp-ok .nvtp-bar-fill{background:var(--dsw-alias-brand-primary)}
 .nvtp-warm .nvtp-bar-fill{background:var(--dsw-alias-state-warn-primary)}
 .nvtp-hot .nvtp-bar-fill{background:var(--dsw-alias-state-error-primary)}
@@ -177,6 +206,11 @@ window.__ModuleLoader__.load({
 .nvtp-empty-note{color:var(--dsw-alias-label-secondary);font-size:13px}
 .nvtp-error{border:1px solid var(--dsw-alias-state-error-primary);border-radius:10px;padding:14px 16px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
 .nvtp-error-label{color:var(--dsw-alias-state-error-primary);font-weight:600;margin-bottom:6px}
+.nvtp-unit-error{display:flex;gap:10px;padding:8px 14px;font-size:12px;align-items:baseline}
+.nvtp-unit-error .nvtp-error-label{margin-bottom:0;flex:none}
+.nvtp-note{border:1px solid var(--dsw-alias-border-l2);border-radius:10px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1)}
+.nvtp-note-label{font-weight:600;flex:none}
+.nvtp-chip{border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:1px 8px;font-size:11px;color:var(--dsw-alias-label-secondary);flex:none}
 `;
 
     function pluralize(template, other, count) {
@@ -229,29 +263,66 @@ window.__ModuleLoader__.load({
             };
           }, []);
 
-          const gpus = data?.gpus ?? [];
+          const units = data !== null && Array.isArray(data.units) && data.units.length > 0
+            ? data.units
+            : data !== null
+              ? [{
+                  id: 'local',
+                  title: translate('localUnit'),
+                  remote: false,
+                  gpus: data.gpus ?? [],
+                  processes: data.processes ?? [],
+                }]
+              : [];
+          const multiUnit = units.length > 1;
+          const numberedUnits = units.map((unit, unitIdx) => ({ ...unit, unitIdx }));
+          const liveUnits = numberedUnits.filter((unit) => !unit.error);
+          const totalGpus = liveUnits.reduce((sum, unit) => sum + (unit.gpus?.length ?? 0), 0);
+          // One nvtop-style table across every unit; DEV is the unit index.
+          const mergedProcesses = liveUnits
+            .flatMap((unit) => (unit.processes ?? []).map((p) => ({ ...p, unitIdx: unit.unitIdx })));
           return h('div', { className: 'nvtp-page' },
             h('style', null, CSS),
             h('h1', { className: 'nvtp-title' }, translate('panel')),
             h('div', { className: 'nvtp-sub' },
               data === null && error === null ? translate('stale')
-                : gpus.length > 0
-                  ? pluralize(translate('gpus'), translate('gpusOther'), gpus.length)
+                : totalGpus > 0
+                  ? (multiUnit
+                      ? `${pluralize(translate('units'), translate('unitsOther'), units.length)} · `
+                      : '')
+                    + pluralize(translate('gpus'), translate('gpusOther'), totalGpus)
                   : ''),
             error !== null
               ? h('div', { className: 'nvtp-error' },
                   h('div', { className: 'nvtp-error-label' }, translate('unavailable')),
                   h('div', null, error))
               : null,
-            gpus.length > 0
-              ? h('div', { className: 'nvtp-grid' },
-                  gpus.map((gpu) => h(GpuCard, { key: gpu.index, gpu, t: translate })))
-              : null,
-            data !== null && error === null
-              ? h('section', { className: 'nvtp-procs' },
-                  h('h2', null, translate('processes')),
-                  h(ProcessTable, { processes: data.processes ?? [], t: translate }))
-              : null);
+            numberedUnits
+              .filter((unit) => unit.error)
+              .map((unit) => h('div', { key: unit.id, className: 'nvtp-error nvtp-unit-error' },
+                h('span', { className: 'nvtp-error-label' }, `Spark #${unit.unitIdx}`),
+                h('span', null, unit.error))),
+            numberedUnits
+              .filter((unit) => !unit.error && unit.note)
+              .map((unit) => h('div', { key: unit.id + ':note', className: 'nvtp-note nvtp-unit-error' },
+                h('span', { className: 'nvtp-note-label' }, `Spark #${unit.unitIdx}`),
+                h('span', null, unit.note))),
+            h('div', { className: 'nvtp-grid' },
+              liveUnits.flatMap((unit) => (unit.gpus ?? []).map((gpu) => h(GpuCard, {
+                key: unit.id + ':' + gpu.index,
+                gpu,
+                t: translate,
+                unitTitle: multiUnit
+                  ? `Spark #${unit.unitIdx} · ${unit.remote === true ? 'SSH' : unit.title}`
+                  : null,
+              })))),
+            h('section', { className: 'nvtp-procs' },
+              h('h2', null, translate('processes')),
+              h(ProcessTable, {
+                processes: mergedProcesses,
+                t: translate,
+                multiUnit,
+              })));
         }
 
         function PanelIcon(props) {
