@@ -35,6 +35,8 @@ window.__ModuleLoader__.load({
         cpu: 'CPU',
         hostMem: 'HOST MEM',
         command: 'Command',
+        gpuTitle: 'This process\'s own SM (compute) utilisation on its GPU, not the whole-GPU figure',
+        gpuMemTitle: 'GPU memory allocated to this process',
       },
     };
 
@@ -61,6 +63,16 @@ window.__ModuleLoader__.load({
 
     function fmtPercent(value) {
       return value === null || value === undefined ? '—' : `${Math.round(value)}%`;
+    }
+
+    /**
+     * Per-process SM utilisation. pmon prints "-" for a context that used no SM
+     * time in the sample window, which reads as 0 % only when the driver does
+     * report per-process figures; otherwise the figure is simply unavailable.
+     */
+    function fmtProcGpu(p, utilReported) {
+      if (p.gpuUtilization !== null && p.gpuUtilization !== undefined) return `${Math.round(p.gpuUtilization)}%`;
+      return utilReported ? '0%' : '—';
     }
 
     function levelClass(ratio) {
@@ -152,8 +164,8 @@ window.__ModuleLoader__.load({
             h('th', null, t('user')),
             h('th', { className: 'nvtp-num', title: multiUnit ? 'unit index' : undefined }, t('dev')),
             h('th', null, t('type')),
-            h('th', { className: 'nvtp-num' }, t('gpu')),
-            h('th', { className: 'nvtp-num' }, t('gpuMem')),
+            h('th', { className: 'nvtp-num', title: t('gpuTitle') }, t('gpu')),
+            h('th', { className: 'nvtp-num', title: t('gpuMemTitle') }, t('gpuMem')),
             h('th', { className: 'nvtp-num' }, t('cpu')),
             h('th', { className: 'nvtp-num' }, t('hostMem')),
             h('th', { className: 'nvtp-cmd' }, t('command')))),
@@ -163,7 +175,7 @@ window.__ModuleLoader__.load({
             h('td', { className: 'nvtp-user' }, p.user ?? '—'),
             h('td', { className: 'nvtp-num' }, deviceText(p)),
             h('td', { className: 'nvtp-type' }, p.type ?? '—'),
-            h('td', { className: 'nvtp-num' }, fmtPercent(p.gpuUtilization)),
+            h('td', { className: 'nvtp-num', title: t('gpuTitle') }, fmtProcGpu(p, p.utilReported === true)),
             h('td', { className: 'nvtp-num' }, fmtMemory(p.memoryUsed)),
             h('td', { className: 'nvtp-num' }, p.cpuPercent === null || p.cpuPercent === undefined ? '—' : `${p.cpuPercent.toFixed(1)}%`),
             h('td', { className: 'nvtp-num' }, fmtHostMemory(p.hostMemKib)),
@@ -280,7 +292,11 @@ window.__ModuleLoader__.load({
           const totalGpus = liveUnits.reduce((sum, unit) => sum + (unit.gpus?.length ?? 0), 0);
           // One nvtop-style table across every unit; DEV is the unit index.
           const mergedProcesses = liveUnits
-            .flatMap((unit) => (unit.processes ?? []).map((p) => ({ ...p, unitIdx: unit.unitIdx })));
+            .flatMap((unit) => (unit.processes ?? []).map((p) => ({
+              ...p,
+              unitIdx: unit.unitIdx,
+              utilReported: unit.perProcessUtil === true,
+            })));
           return h('div', { className: 'nvtp-page' },
             h('style', null, CSS),
             h('h1', { className: 'nvtp-title' }, translate('panel')),

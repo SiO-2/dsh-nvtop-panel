@@ -32,9 +32,12 @@ PID       USER     DEV TYPE  GPU   GPU MEM    CPU  HOST MEM  Command
   HOST MEM · Command`. GPU memory comes from `nvidia-smi --query-compute-apps`; user,
   CPU %, host RSS, and full command line come from one batched `ps` call; each process
   is mapped to its device via GPU UUID.
-  - `TYPE` is `C` (compute) — the CSV interface only lists compute contexts.
-  - `GPU` is the process's device utilization; per-process SM utilization is a
-    driver-level statistic that `nvidia-smi`'s query interface does not expose.
+  - `TYPE` is `C` (compute) or `G` (graphics), as reported by `nvidia-smi pmon`.
+  - `GPU` is **this process's own SM (compute) utilisation** on its device, read
+    from `nvidia-smi pmon`, matched by device *and* pid — never the whole-GPU
+    figure. A process with no SM activity in the sample window shows `0%`.
+    On a driver that does not report per-process figures the column shows `—`
+    rather than substituting a misleading number.
 - **Auto-refresh**, interval configurable per profile (default 2 s), server samples
   cached 1 s so overlapping polls share one `nvidia-smi` run.
 - **Theme-native UI**: all styling uses DSH theme tokens (`--dsw-alias-*`), light/dark
@@ -115,10 +118,9 @@ A peer without an NVIDIA GPU shows a note instead of silently disappearing.
 Anyone who can open this DSH page can read the peer units' process tables;
 peers are therefore exactly as visible as the dsh user's SSH keys allow.
 
-Per-process GPU utilization and per-process unified-memory splits are
-driver-level statistics that `nvidia-smi`'s query interface does not expose; the
-`GPU` column shows device utilization and `GPU MEM` the compute-app allocation,
-as nvtop does on this hardware.
+Per-process SM utilisation comes from `nvidia-smi pmon`. Per-process unified-memory
+splits remain a driver-level statistic that `nvidia-smi` does not expose: `GPU MEM` is
+the compute-app allocation, as nvtop does on this hardware.
 
 ## Verify
 

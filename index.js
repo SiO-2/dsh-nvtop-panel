@@ -45,12 +45,13 @@ const SMI_TIMEOUT_MS = 5000;
 const SSH_TIMEOUT_MS = 8000;
 
 /** Marker names delimiting sections of the one-shot remote probe script. */
-const REMOTE_SECTIONS = ['HOST', 'SMI', 'APPS', 'MEM'];
+const REMOTE_SECTIONS = ['HOST', 'SMI', 'APPS', 'PMON', 'MEM'];
 
 const REMOTE_PROBE = [
   "printf '__NVTP_HOST__\\n'; hostname 2>/dev/null || echo unknown",
   `printf '__NVTP_SMI__\\n'; nvidia-smi --query-gpu=${QUERY_FIELDS} --format=csv,noheader,nounits 2>/dev/null`,
   `printf '__NVTP_APPS__\\n'; nvidia-smi --query-compute-apps=${APP_FIELDS} --format=csv,noheader,nounits 2>/dev/null`,
+  "printf '__NVTP_PMON__\\n'; nvidia-smi pmon -c 1 -s um 2>/dev/null",
   "printf '__NVTP_MEM__\\n'; grep -E 'MemTotal|MemAvailable' /proc/meminfo 2>/dev/null",
 ].join('; ');
 
@@ -174,6 +175,52 @@ function parseAppsCsv(text) {
 }
 
 /**
+ * Parse `nvidia-smi pmon -c 1` output into per-process utilisation rows.
+ *
+ * Each row is one (gpu, pid) context, so a process using several GPUs has one
+ * row per device. `sm` is the share of SM time the process used in the last
+ * sample window; `mem` is its memory-controller (bandwidth) utilisation. Both
+ * are null when the driver prints "-" (no activity / not reported).
+ * @internal exported for tests.
+ */
+function parsePmon(text) {
+  const rows = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (line.startsWith('#')) continue;
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+([CG])\s+(\S+)\s+(\S+)\s/);
+    if (match === null) continue;
+    rows.push({
+      device: Number(match[1]),
+      pid: Number(match[2]),
+      type: match[3],
+      sm: numeric(match[4]),
+      mem: numeric(match[5]),
+    });
+  }
+  return rows;
+}
+
+/** Index pmon rows by pid, keeping one row per device for multi-GPU processes. */
+function pmonByPid(rows) {
+  const byPid = new Map();
+  for (const row of rows) {
+    const list = byPid.get(row.pid);
+    if (list === undefined) byPid.set(row.pid, [row]);
+    else list.push(row);
+  }
+  return byPid;
+}
+
+/** Sample per-process utilisation; empty when the driver does not support pmon. */
+async function samplePmon(runner) {
+  try {
+    return parsePmon(await runner(['pmon', '-c', '1', '-s', 'um']));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Parse MemTotal / MemAvailable from /proc/meminfo text.
  * @internal exported for tests.
  */
@@ -228,9 +275,11 @@ const PS_ARGS = ['-o', 'pid=,user=,%cpu=,rss=,args='];
  * [N/A] because the GPU shares the LPDDR5X pool with the CPU. Following the
  * sparkDash approach, `used` then comes from the compute-apps sum and `total`
  * from the OS-visible pool (MemTotal), with MemAvailable as the free figure.
+ * @param pmon - `nvidia-smi pmon` rows of this unit; per-process SM utilisation
+ *   when the driver reports it, otherwise an empty list.
  * @internal exported for tests.
  */
-function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails }) {
+function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails, pmon = [] }) {
   const poolTotalMib = mem.totalKib !== null ? mem.totalKib / 1024 : null;
   const poolAvailMib = mem.availKib !== null ? mem.availKib / 1024 : null;
 
@@ -242,6 +291,10 @@ function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails }) {
   }
 
   const deviceOfUuid = new Map();
+  // pmon addresses devices by index; remember the index of each queried GPU uuid
+  // so a pmon row can be matched to the nvidia-smi gpu row it belongs to.
+  const uuidOfDevice = new Map();
+  const pmonSeen = new Set();
 
   const gpus = gpusRaw.map((gpu) => {
     const isSparkChip = /GB10|DGX\s*Spark/i.test(gpu.name ?? '');
@@ -274,6 +327,7 @@ function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails }) {
       }
     }
     if (gpu.uuid !== '') deviceOfUuid.set(gpu.uuid, gpu.index);
+    uuidOfDevice.set(gpu.index, gpu.uuid);
     return {
       ...gpu,
       memoryUsed,
@@ -294,16 +348,36 @@ function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails }) {
     name: app.name,
   }));
 
+  // Per-process utilisation: a pmon row matches when both the pid and the
+  // device agree. The device check keeps a multi-GPU process from borrowing the
+  // SM figure it earned on another card.
+  const pmonKey = (device, pid) => `${device}:${pid}`;
+  const pmonRows = new Map();
+  for (const row of pmon) {
+    if (!uuidOfDevice.has(row.device)) continue;
+    const key = pmonKey(row.device, row.pid);
+    if (!pmonRows.has(key)) pmonRows.set(key, []);
+    pmonRows.get(key).push(row);
+  }
+
   const processes = entries.map((entry) => {
     const extra = psDetails.get(entry.pid);
     const device = gpus.find((gpu) => gpu.index === entry.device);
+    const rows = entry.device === null
+      ? []
+      : (pmonRows.get(pmonKey(entry.device, entry.pid)) ?? []);
+    const measured = rows.find((row) => row.sm !== null) ?? rows[0];
+    if (measured !== undefined) pmonSeen.add(pmonKey(entry.device, entry.pid));
     return {
       pid: entry.pid,
       user: extra?.user ?? null,
       device: entry.device,
-      // nvidia-smi lists compute contexts; nvtop labels them "C".
-      type: 'C',
-      gpuUtilization: device?.utilization ?? null,
+      // pmon knows C (compute) and G (graphics); compute-apps only lists C.
+      type: measured?.type ?? 'C',
+      // This process's own SM utilisation on this device. Null means the driver
+      // did not report it: it must never fall back to the whole-GPU figure.
+      gpuUtilization: measured !== undefined ? measured.sm : null,
+      gpuMemUtilization: measured !== undefined ? measured.mem : null,
       memoryUsed: entry.memoryUsed,
       cpuPercent: extra?.cpu ?? null,
       hostMemKib: extra?.rssKib ?? null,
@@ -311,15 +385,25 @@ function assembleUnit({ title, remote, gpusRaw, apps, mem, psDetails }) {
     };
   });
 
-  return { title, remote, gpus, processes, hostMem: mem };
+  return {
+    title,
+    remote,
+    gpus,
+    processes,
+    hostMem: mem,
+    // False when the driver gave no per-process figures at all, so the UI can
+    // say the GPU column is unavailable rather than silently showing zeros.
+    perProcessUtil: pmonSeen.size > 0,
+  };
 }
 
 async function sampleLocal() {
-  const [gpuText, appText, memText] = await Promise.all([
+  const [gpuText, appText, memText, pmon] = await Promise.all([
     runSmi(['--query-gpu', QUERY_FIELDS, '--format=csv,noheader,nounits']),
     runSmi(['--query-compute-apps', APP_FIELDS, '--format=csv,noheader,nounits'])
       .catch(() => ''),
     readFile('/proc/meminfo', 'utf8').catch(() => ''),
+    samplePmon((args) => runSmi(args)),
   ]);
   const apps = parseAppsCsv(appText);
   const psDetails = await processDetails(
@@ -333,6 +417,7 @@ async function sampleLocal() {
     apps,
     mem: parseMeminfo(memText),
     psDetails,
+    pmon,
   });
 }
 
@@ -370,6 +455,7 @@ async function probePeer(peer) {
     apps,
     mem: parseMeminfo(sections.mem ?? ''),
     psDetails,
+    pmon: parsePmon(sections.pmon ?? ''),
   });
   const complete = { id: peer.host, configuredTitle: peer.title ?? peer.host, ...unit };
   if (complete.gpus.length === 0) {
@@ -511,6 +597,7 @@ export {
   parseGpuCsv,
   parseAppsCsv,
   parseMeminfo,
+  parsePmon,
   assembleUnit,
   splitRemoteSections,
 };
