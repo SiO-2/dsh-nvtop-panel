@@ -200,17 +200,6 @@ function parsePmon(text) {
   return rows;
 }
 
-/** Index pmon rows by pid, keeping one row per device for multi-GPU processes. */
-function pmonByPid(rows) {
-  const byPid = new Map();
-  for (const row of rows) {
-    const list = byPid.get(row.pid);
-    if (list === undefined) byPid.set(row.pid, [row]);
-    else list.push(row);
-  }
-  return byPid;
-}
-
 /** Sample per-process utilisation; empty when the driver does not support pmon. */
 async function samplePmon(runner) {
   try {
